@@ -49,8 +49,10 @@ def get_db_engine():
     if db_host:
         DB_URL = f"postgresql+psycopg://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
     else:
-        DB_URL = os.getenv("POSTGRES_URL", "postgresql+psycopg://postgres:password@localhost:5432/clinical_db")
+        DB_URL = os.getenv("POSTGRES_URL")
     
+    if not DB_URL:
+        raise RuntimeError("Database not configured: set DB_HOST/DB_USER/DB_PASSWORD/DB_NAME or POSTGRES_URL")
     return create_engine(DB_URL)
 
 

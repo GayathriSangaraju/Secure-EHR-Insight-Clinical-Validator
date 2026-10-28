@@ -1,6 +1,29 @@
+# Secrets / environment
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Streamlit
 .streamlit/
+
+# Editor / OS
 .vscode/
+.idea/
 .DS_Store
+
+# Clinical data: NEVER commit. MIMIC-IV is credentialed (PhysioNet DUA).
+data/*
+!data/README.md
+!data/sample/
+*.csv
+!data/sample/*.csv
