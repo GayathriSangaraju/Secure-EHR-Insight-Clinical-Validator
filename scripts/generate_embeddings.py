@@ -1,83 +1,81 @@
-import os
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
+"""Generate and store clinical embeddings for rows that don't have one yet.
+
+Resumable: each batch is committed, and only rows with a NULL embedding are processed.
+"""
+
+import argparse
+
 from sentence_transformers import SentenceTransformer
+from sqlalchemy import text
 from tqdm import tqdm
 
-def generate_and_store_embeddings():
-    load_dotenv()
-    db_url = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-    engine = create_engine(db_url)
-    
-    # 1. Load the BioClinical ModernBERT embedding model
-    print("⏳ Loading local BioClinical ModernBERT model...")
-    model = SentenceTransformer('NeuML/bioclinical-modernbert-base-embeddings')
-    
-    # Guardrail: Programmatically verify the output dimension is 768
-    if model.get_sentence_embedding_dimension() != 768:
-        raise ValueError("CRITICAL DIMENSION MISMATCH: Model output does not match database vector(768).")
+from src.config import EMBEDDING_DIM, get_settings
+from src.database.engine import get_engine
+from src.embeddings import build_clinical_text, vector_literal
 
-    # Increase batch size for network efficiency
-    batch_size = 2
-    # For a demo, 10,000 records is perfect to prove scale without waiting hours
-    demo_limit = 10
-    
-    with engine.begin() as conn:
-        print(f"🚀 Generating batched embeddings for up to {demo_limit} patient records...")
-        
-        with tqdm(total=demo_limit, desc="Vectorizing PHI", unit="rows") as pbar:
-            processed = 0
-            
-            while processed < demo_limit:
-                # Fetch a batch of records
-                select_query = text("""
-                    SELECT id, admission_type, drug, test_name, drg_severity, description, comments 
-                    FROM patient_encounters 
-                    WHERE clinical_embedding IS NULL 
-                    LIMIT :batch_size
-                """)
-                batch = conn.execute(select_query, {"batch_size": batch_size}).mappings().fetchall()
-                
-                if not batch:
-                    break # No more NULL records
-                
-                # 1. Extract strings into a single list for parallel processing
-                clinical_texts = []
-                ids = []
-                for row in batch:
-                    components = []
-                    if row['admission_type']: components.append(f"Admission: {row['admission_type']}")
-                    if row['drug']: components.append(f"Prescribed: {row['drug']}")
-                    if row['test_name']: components.append(f"Lab Test: {row['test_name']}")
-                    if row['drg_severity']: components.append(f"Severity Level: {row['drg_severity']}")
-                    if row['description']: components.append(f"Diagnosis: {row['description']}")
-                    if row['comments']: components.append(f"Notes: {row['comments'][:250]}")
-                    
-                    clinical_texts.append(" | ".join(components))
-                    ids.append(row['id'])
-                
-                # 2. BATCHED ENCODING: Feed the entire list to the model at once!
-                # This engages PyTorch's parallel processing.
-                embeddings = model.encode(clinical_texts, batch_size=batch_size).tolist()
-                
-                # 3. Prepare BULK update parameters
-                update_params = [
-                    {"id": record_id, "embedding": str(emb)} 
-                    for record_id, emb in zip(ids, embeddings)
-                ]
-                
-                # 4. BULK UPDATE: execute all 250 rows in a single network round-trip
-                update_query = text("""
-                    UPDATE patient_encounters 
-                    SET clinical_embedding = :embedding 
-                    WHERE id = :id
-                """)
-                conn.execute(update_query, update_params)
-                
-                processed += len(batch)
-                pbar.update(len(batch))
+SELECT_BATCH = text(
+    """
+    SELECT id, admission_type, drug, test_name, drg_severity, description, comments
+    FROM patient_encounters
+    WHERE clinical_embedding IS NULL
+    ORDER BY id
+    LIMIT :batch_size
+    """
+)
+UPDATE_ROW = text(
+    "UPDATE patient_encounters SET clinical_embedding = CAST(:embedding AS vector) WHERE id = :id"
+)
 
-    print("\n✅ Phase 3 Complete: Clinical records are vectorized and ready for hybrid search.")
+
+def generate(model_name: str, batch_size: int, limit: int | None) -> None:
+    engine = get_engine()
+
+    print(f"Loading embedding model {model_name} ...")
+    model = SentenceTransformer(model_name)
+    if model.get_sentence_embedding_dimension() != EMBEDDING_DIM:
+        raise ValueError(
+            f"Model outputs {model.get_sentence_embedding_dimension()} dims but the database "
+            f"column is vector({EMBEDDING_DIM})."
+        )
+
+    with engine.connect() as conn:
+        pending = conn.execute(
+            text("SELECT COUNT(*) FROM patient_encounters WHERE clinical_embedding IS NULL")
+        ).scalar_one()
+    total = min(pending, limit) if limit else pending
+    print(f"{pending} rows need embeddings; processing {total}.")
+
+    processed = 0
+    with tqdm(total=total, desc="Embedding", unit="rows") as bar:
+        while processed < total:
+            size = min(batch_size, total - processed)
+            with engine.begin() as conn:
+                rows = conn.execute(SELECT_BATCH, {"batch_size": size}).mappings().all()
+                if not rows:
+                    break
+                texts = [build_clinical_text(r) for r in rows]
+                vectors = model.encode(texts, batch_size=batch_size)
+                conn.execute(
+                    UPDATE_ROW,
+                    [
+                        {"id": r["id"], "embedding": vector_literal(v)}
+                        for r, v in zip(rows, vectors, strict=True)
+                    ],
+                )
+            processed += len(rows)
+            bar.update(len(rows))
+
+    print(f"Done: embedded {processed} rows.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default=get_settings().embedding_model)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--limit", type=int, default=None, help="max rows to embed (default: all)")
+    args = parser.parse_args()
+    generate(args.model, args.batch_size, args.limit)
+
 
 if __name__ == "__main__":
-    generate_and_store_embeddings()
+    main()

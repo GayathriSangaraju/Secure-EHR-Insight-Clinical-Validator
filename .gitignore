@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# Keys and certificates (e.g. EC2 SSH keys)
+*.pem
+*.key
+
 # Python
 __pycache__/
 *.pyc

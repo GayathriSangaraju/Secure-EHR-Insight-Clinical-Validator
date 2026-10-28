@@ -1,47 +1,37 @@
-import os
-import pandas as pd
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
+"""Quick data-integrity report for the patient_encounters table."""
 
-def verify_ingestion():
-    # Load environment variables
-    load_dotenv()
-    
-    db_url = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-    engine = create_engine(db_url)
-    
-    print("🔍 Verifying Data Integrity in AWS PostgreSQL...\n")
-    
-    with engine.connect() as conn:
-        # 1. Check Total Row Count
-        count_result = conn.execute(text("SELECT COUNT(*) FROM patient_encounters")).scalar()
-        print(f"Total records found: {count_result}")
-        
-        if count_result == 0:
-            print("⚠️ Warning: Table is empty. Ingestion may have failed.")
+from sqlalchemy import text
+
+from src.database.engine import get_engine
+
+
+def main() -> None:
+    with get_engine().connect() as conn:
+        total = conn.execute(text("SELECT COUNT(*) FROM patient_encounters")).scalar_one()
+        print(f"Total records: {total}")
+        if total == 0:
+            print("Warning: table is empty. Run scripts/ingest_baseline_data.py first.")
             return
-            
-        # 2. Retrieve a Sample of Critical Clinical Columns
-        # We select specific columns so the terminal output is readable
-        print("\nFetching sample clinical records...")
-        query = text("""
-            SELECT 
-                subject_id, 
-                admission_type, 
-                drug, 
-                drg_severity 
-            FROM patient_encounters 
-            WHERE drug IS NOT NULL
-            LIMIT 5
-        """)
-        
-        # Use Pandas for clean terminal formatting
-        sample_df = pd.read_sql(query, conn)
-        
-        print("-" * 65)
-        print(sample_df.to_string(index=False))
-        print("-" * 65)
-        print("\n✅ Verification complete. Legacy database state is confirmed.")
+
+        patients = conn.execute(
+            text("SELECT COUNT(DISTINCT subject_id) FROM patient_encounters")
+        ).scalar_one()
+        embedded = conn.execute(
+            text("SELECT COUNT(*) FROM patient_encounters WHERE clinical_embedding IS NOT NULL")
+        ).scalar_one()
+        print(f"Distinct patients: {patients}")
+        print(f"Rows with embeddings: {embedded} ({embedded / total:.1%})")
+
+        print("\nSample rows:")
+        rows = conn.execute(
+            text(
+                "SELECT subject_id, admission_type, drug, drg_severity "
+                "FROM patient_encounters WHERE drug IS NOT NULL LIMIT 5"
+            )
+        )
+        for r in rows:
+            print(f"  {r.subject_id:<10} {r.admission_type!s:<10} {r.drug!s:<25} {r.drg_severity}")
+
 
 if __name__ == "__main__":
-    verify_ingestion()
+    main()

@@ -1,10 +1,18 @@
 models:
   - type: main
     engine: openai
-    model:  gpt-4o-mini
+    model: gpt-4o-mini
     parameters:
       base_url: "https://api.openai.com/v1"
-    
+
   - type: embeddings
     engine: SentenceTransformers
     model: NeuML/bioclinical-modernbert-base-embeddings
+
+instructions:
+  - type: general
+    content: |
+      You are a read-only retrieval assistant for an electronic health record system.
+      Answer only from the "Clinical Context" provided in the user message. If the answer is
+      not in the context, say you cannot find it. Never invent doses, dates or lab values.
+      Never give diagnoses or treatment recommendations.

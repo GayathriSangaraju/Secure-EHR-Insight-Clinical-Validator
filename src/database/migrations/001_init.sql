@@ -1,4 +1,4 @@
--- src/database/schema.sql
+-- Base table for MIMIC-IV derived encounter records.
 CREATE TABLE IF NOT EXISTS patient_encounters (
     id SERIAL PRIMARY KEY,
     subject_id BIGINT,
@@ -33,3 +33,7 @@ CREATE TABLE IF NOT EXISTS patient_encounters (
     drg_severity VARCHAR(50),
     drg_mortality VARCHAR(50)
 );
+
+-- Every chat query filters by patient first.
+CREATE INDEX IF NOT EXISTS idx_patient_encounters_subject_id
+    ON patient_encounters (subject_id);
