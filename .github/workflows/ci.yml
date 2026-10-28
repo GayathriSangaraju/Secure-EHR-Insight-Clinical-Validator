@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (dev + pii; heavy ML libs are faked in tests)
+        run: |
+          pip install -e ".[dev,pii]"
+          python -m spacy download en_core_web_lg
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest
+
+  guard-no-clinical-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if data files are tracked outside data/sample/
+        run: |
+          bad=$(git ls-files | grep -Ei '\.(csv|tsv|parquet|xlsx?|sqlite3?|db)$' | grep -v '^data/sample/' || true)
+          if [ -n "$bad" ]; then
+            echo "Tracked data files (MIMIC-IV must never be committed):"
+            echo "$bad"
+            exit 1
+          fi
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
