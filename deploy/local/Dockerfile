@@ -2,7 +2,7 @@
 # One image definition, two flavours selected by EXTRAS:
 #   api: --build-arg EXTRAS=ml,pii,data   (models + redaction + embedding job)  [default]
 #   ui:  --build-arg EXTRAS=ui
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 ARG EXTRAS="ml,pii,data"
 ENV PYTHONUNBUFFERED=1 \
